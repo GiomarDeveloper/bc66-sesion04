@@ -1,73 +1,106 @@
 package com.bank.transactions.application.service;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.anyString;
+import static org.mockito.Mockito.when;
+
 import com.bank.transactions.domain.model.RiskRule;
 import com.bank.transactions.domain.repository.RiskRuleRepository;
+import java.math.BigDecimal;
+import java.util.Optional;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.Mockito;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
-import java.math.BigDecimal;
-import java.util.Optional;
-
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.when;
-
-@ExtendWith(MockitoExtension.class)
 class RiskServiceTest {
 
-    @Mock
-    private RiskRuleRepository riskRuleRepository;
-
-    @InjectMocks
+  private RiskRuleRepository riskRepo;
     private RiskService riskService;
 
-    @Test
-    void allowsDebitUnderLimit() {
-        // Given
-        RiskRule riskRule = RiskRule.builder()
-                .currency("PEN")
-                .maxDebitPerTx(new BigDecimal("1500"))
-                .build();
+  @BeforeEach
+  void setup() {
+    riskRepo = Mockito.mock(RiskRuleRepository.class);
+    riskService = new RiskService(riskRepo);
+  }
 
-        when(riskRuleRepository.findFirstByCurrency("PEN"))
-                .thenReturn(Optional.of(riskRule));
+  @Test
+  void isAllowed_debitBelowLimit_shouldReturnTrue() {
+    RiskRule rule =
+      RiskRule.builder().currency("USD").maxDebitPerTx(new BigDecimal("5000")).build();
+    when(riskRepo.findFirstByCurrency("USD")).thenReturn(Optional.of(rule));
 
-        // When & Then
-        StepVerifier.create(riskService.isAllowed("PEN", "DEBIT", new BigDecimal("100")))
+    Mono<Boolean> result = riskService.isAllowed("USD", "DEBIT", new BigDecimal("1000"));
+
+    StepVerifier.create(result)
                 .expectNext(true)
                 .verifyComplete();
     }
 
     @Test
-    void rejectsDebitOverLimit() {
-        // Given
-        RiskRule riskRule = RiskRule.builder()
-                .currency("PEN")
-                .maxDebitPerTx(new BigDecimal("1500"))
-                .build();
+    void isAllowed_debitAboveLimit_shouldReturnFalse() {
+      RiskRule rule =
+        RiskRule.builder().currency("USD").maxDebitPerTx(new BigDecimal("1000")).build();
+      when(riskRepo.findFirstByCurrency("USD")).thenReturn(Optional.of(rule));
 
-        when(riskRuleRepository.findFirstByCurrency("PEN"))
-                .thenReturn(Optional.of(riskRule));
-
-        // When & Then
-        StepVerifier.create(riskService.isAllowed("PEN", "DEBIT", new BigDecimal("2000")))
+      StepVerifier.create(riskService.isAllowed("USD", "DEBIT", new BigDecimal("5000")))
                 .expectNext(false)
                 .verifyComplete();
     }
 
     @Test
-    void allowsCreditTransaction() {
-        // Given
-        when(riskRuleRepository.findFirstByCurrency(anyString()))
-                .thenReturn(Optional.empty());
+    void isAllowed_creditTransaction_shouldAlwaysReturnTrue() {
+      when(riskRepo.findFirstByCurrency("USD")).thenReturn(Optional.empty());
 
-        // When & Then
-        StepVerifier.create(riskService.isAllowed("PEN", "CREDIT", new BigDecimal("10000")))
+      StepVerifier.create(riskService.isAllowed("USD", "CREDIT", new BigDecimal("5000")))
                 .expectNext(true)
                 .verifyComplete();
     }
+
+  @Test
+  void isAllowed_onError_shouldReturnFalse() {
+    when(riskRepo.findFirstByCurrency(anyString())).thenThrow(new RuntimeException("DB error"));
+
+    StepVerifier.create(riskService.isAllowed("USD", "DEBIT", BigDecimal.TEN))
+      .expectNext(false)
+      .verifyComplete();
+  }
+
+  @Test
+  void isAllowedLegacy_debitBelowLimit_shouldReturnTrue() {
+    RiskRule rule =
+      RiskRule.builder().currency("USD").maxDebitPerTx(new BigDecimal("2000")).build();
+    when(riskRepo.findFirstByCurrency("USD")).thenReturn(Optional.of(rule));
+
+    Boolean allowed = riskService.isAllowedLegacy("USD", "DEBIT", new BigDecimal("1000"));
+    assertTrue(allowed);
+  }
+
+  @Test
+  void isAllowedLegacy_debitAboveLimit_shouldReturnFalse() {
+    RiskRule rule =
+      RiskRule.builder().currency("USD").maxDebitPerTx(new BigDecimal("1000")).build();
+    when(riskRepo.findFirstByCurrency("USD")).thenReturn(Optional.of(rule));
+
+    Boolean allowed = riskService.isAllowedLegacy("USD", "DEBIT", new BigDecimal("5000"));
+    assertFalse(allowed);
+  }
+
+  @Test
+  void isAllowedLegacy_creditAlwaysAllowed() {
+    when(riskRepo.findFirstByCurrency("USD")).thenReturn(Optional.empty());
+
+    Boolean allowed = riskService.isAllowedLegacy("USD", "CREDIT", new BigDecimal("5000"));
+    assertTrue(allowed);
+  }
+
+  @Test
+  void isAllowedLegacy_exceptionHandled_shouldReturnFalse() {
+    when(riskRepo.findFirstByCurrency(anyString())).thenThrow(new RuntimeException("DB error"));
+
+    Boolean allowed = riskService.isAllowedLegacy("USD", "DEBIT", new BigDecimal("1000"));
+    assertFalse(allowed);
+  }
 }
